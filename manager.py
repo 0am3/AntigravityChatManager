@@ -11,6 +11,26 @@ def clean_chat(chat_id):
     ag_root = scanner.get_antigravity_root()
     deleted_count = 0
     
+    # Surgical index purging: Overwrite the chat_id in global protobuf indexes
+    # to safely remove it from the left-side bar without corrupting the file structure.
+    zero_uuid = b"00000000-0000-0000-0000-000000000000"
+    target_uuid = chat_id.encode('utf-8')
+    
+    for filename in os.listdir(ag_root):
+        if filename.endswith(".pb") or filename.endswith(".pbtxt"):
+            filepath = os.path.join(ag_root, filename)
+            if os.path.isfile(filepath):
+                try:
+                    with open(filepath, 'rb') as f:
+                        content = f.read()
+                    if target_uuid in content:
+                        new_content = content.replace(target_uuid, zero_uuid)
+                        with open(filepath, 'wb') as f:
+                            f.write(new_content)
+                        deleted_count += 1
+                except Exception:
+                    pass
+    
     # We walk bottom-up so we can safely delete directories without breaking the walk
     for root, dirs, files in os.walk(ag_root, topdown=False):
         for f in files:
