@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -32,6 +33,36 @@ def format_size(size_bytes):
         i += 1
     return f"{size_bytes:.2f} {size_names[i]}"
 
+def get_chat_title(transcript_path):
+    """Extracts a short title from the first user request in the transcript."""
+    if not os.path.exists(transcript_path):
+        return "Unknown Chat"
+    try:
+        with open(transcript_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                try:
+                    data = json.loads(line)
+                    if data.get('type') == 'USER_INPUT':
+                        content = data.get('content', '')
+                        match = re.search(r'<USER_REQUEST>(.*?)</USER_REQUEST>', content, re.DOTALL)
+                        if match:
+                            text = match.group(1).strip()
+                        else:
+                            text = content.strip()
+                        
+                        text = " ".join(text.split())
+                        if not text:
+                            return "Empty Chat"
+                        
+                        if len(text) > 60:
+                            return text[:57] + "..."
+                        return text
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return "Unknown Chat"
+
 def scan_chats():
     """
     Scans the brain directory and returns a list of dictionaries 
@@ -59,15 +90,18 @@ def scan_chats():
                 transcript_path = os.path.join(item_path, '.system_generated', 'logs', 'transcript.jsonl')
                 has_transcript = os.path.exists(transcript_path)
                 
+                title = "Unknown Chat"
                 if has_transcript:
                     transcript_stat = os.stat(transcript_path)
                     modified_time = datetime.fromtimestamp(transcript_stat.st_mtime)
+                    title = get_chat_title(transcript_path)
 
                 # Get directory size
                 total_size_bytes = get_dir_size(item_path)
                 
                 chats.append({
                     'id': item,
+                    'title': title,
                     'path': item_path,
                     'created_at': created_time,
                     'modified_at': modified_time,
@@ -88,4 +122,4 @@ if __name__ == "__main__":
     chats = scan_chats()
     print(f"Found {len(chats)} chats.")
     for c in chats:
-        print(f"[{c['id']}] Size: {c['size_formatted']} | Modified: {c['modified_at']}")
+        print(f"[{c['id']}] {c['title']} | Size: {c['size_formatted']} | Modified: {c['modified_at']}")

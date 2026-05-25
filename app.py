@@ -69,7 +69,11 @@ class ChatManagerApp(ctk.CTk):
         info_frame = ctk.CTkFrame(card, fg_color="transparent")
         info_frame.grid(row=0, column=0, padx=15, pady=10, sticky="w")
         
-        id_lbl = ctk.CTkLabel(info_frame, text=f"ID: {chat['id']}", font=ctk.CTkFont(weight="bold", size=14))
+        title_text = chat.get('title', 'Unknown Chat')
+        title_lbl = ctk.CTkLabel(info_frame, text=title_text, font=ctk.CTkFont(weight="bold", size=16), text_color="#E0E0E0")
+        title_lbl.pack(anchor="w")
+        
+        id_lbl = ctk.CTkLabel(info_frame, text=f"ID: {chat['id']}", font=ctk.CTkFont(size=11), text_color="gray")
         id_lbl.pack(anchor="w")
         
         mod_str = chat['modified_at'].strftime("%Y-%m-%d %H:%M:%S")
