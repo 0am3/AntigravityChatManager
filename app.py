@@ -95,7 +95,7 @@ class ChatManagerApp(ctk.CTk):
         if not output_dir:
             return
         
-        success, msg = manager.package_chat(chat['id'], chat['path'], output_dir)
+        success, msg = manager.package_chat(chat['id'], output_dir)
         if success:
             messagebox.showinfo("Success", msg)
         else:
@@ -104,8 +104,9 @@ class ChatManagerApp(ctk.CTk):
     def on_clean_clicked(self, chat):
         confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to permanently delete session:\n{chat['id']}?\n\nThis action cannot be undone unless you have a backup.")
         if confirm:
-            success, msg = manager.clean_chat(chat['path'])
+            success, msg = manager.clean_chat(chat['id'])
             if success:
+                messagebox.showinfo("Success", msg)
                 self.load_chats()
             else:
                 messagebox.showerror("Error", msg)
@@ -115,8 +116,7 @@ class ChatManagerApp(ctk.CTk):
         if not zip_path:
             return
         
-        target_brain = scanner.get_brain_path()
-        success, msg = manager.restore_chat(zip_path, target_brain)
+        success, msg = manager.restore_chat(zip_path)
         if success:
             messagebox.showinfo("Success", msg)
             self.load_chats()

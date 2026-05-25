@@ -1,50 +1,78 @@
 import os
 import shutil
 import zipfile
-from pathlib import Path
+import scanner
 
-def clean_chat(chat_path):
+def clean_chat(chat_id):
     """
-    Deeply deletes a chat folder and all its contents.
-    Returns True if successful, False otherwise.
+    Globally walks the AntiGravity root and deletes ANY file or folder 
+    containing the chat_id, ensuring no ghost data is left behind.
     """
-    if os.path.exists(chat_path) and os.path.isdir(chat_path):
-        try:
-            shutil.rmtree(chat_path)
-            return True, "Chat successfully cleaned."
-        except Exception as e:
-            return False, f"Failed to clean chat: {e}"
-    return False, "Chat path does not exist."
+    ag_root = scanner.get_antigravity_root()
+    deleted_count = 0
+    
+    # We walk bottom-up so we can safely delete directories without breaking the walk
+    for root, dirs, files in os.walk(ag_root, topdown=False):
+        for f in files:
+            if chat_id in f or chat_id in root:
+                fp = os.path.join(root, f)
+                try:
+                    os.remove(fp)
+                    deleted_count += 1
+                except Exception:
+                    pass
+        
+        for d in dirs:
+            if chat_id in d:
+                dp = os.path.join(root, d)
+                try:
+                    shutil.rmtree(dp)
+                    deleted_count += 1
+                except Exception:
+                    pass
+                    
+    if deleted_count > 0:
+        return True, f"Session thoroughly purged. {deleted_count} scattered artifacts removed."
+    return False, "No data found to clean."
 
-def package_chat(chat_id, chat_path, output_dir):
+def package_chat(chat_id, output_dir):
     """
-    Zips a chat folder to the given output directory.
-    Returns True and the zip path if successful, False otherwise.
+    Globally packages all files related to the chat_id from anywhere inside 
+    the AntiGravity root into a structured zip file.
     """
-    if not os.path.exists(chat_path):
-        return False, "Chat path does not exist."
+    ag_root = scanner.get_antigravity_root()
     
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    zip_filename = f"{chat_id}_backup.zip"
+    zip_filename = f"{chat_id}_global_backup.zip"
     zip_path = os.path.join(output_dir, zip_filename)
 
     try:
-        # shutil.make_archive adds .zip to the base_name, so we remove it from the argument
-        base_name = zip_path[:-4] if zip_path.endswith('.zip') else zip_path
-        
-        # We want the contents of the chat to be inside a folder named <chat_id> in the zip
-        shutil.make_archive(base_name, 'zip', root_dir=os.path.dirname(chat_path), base_dir=os.path.basename(chat_path))
-        return True, f"Packaged successfully at {zip_path}"
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            files_added = 0
+            for root, dirs, files in os.walk(ag_root):
+                for f in files:
+                    if chat_id in f or chat_id in root:
+                        fp = os.path.join(root, f)
+                        # The arcname is the relative path from the antigravity root
+                        arcname = os.path.relpath(fp, ag_root)
+                        zipf.write(fp, arcname)
+                        files_added += 1
+                        
+        if files_added > 0:
+            return True, f"Global package successful! {files_added} artifacts safely archived at {zip_path}"
+        else:
+            return False, "No files found to package for this session."
     except Exception as e:
-        return False, f"Failed to package chat: {e}"
+        return False, f"Failed to package session: {e}"
 
-def restore_chat(zip_path, target_brain_path):
+def restore_chat(zip_path):
     """
-    Restores a packaged chat (.zip) into the brain directory.
-    Returns True if successful, False otherwise.
+    Restores a globally packaged zip file directly into the AntiGravity root.
     """
+    ag_root = scanner.get_antigravity_root()
+    
     if not os.path.exists(zip_path):
         return False, "Zip file does not exist."
     
@@ -52,7 +80,9 @@ def restore_chat(zip_path, target_brain_path):
         return False, "File is not a valid zip archive."
 
     try:
-        shutil.unpack_archive(zip_path, extract_dir=target_brain_path, format='zip')
-        return True, "Chat restored successfully."
+        # Extract directly into the antigravity root to mirror the saved structure
+        with zipfile.ZipFile(zip_path, 'r') as zipf:
+            zipf.extractall(path=ag_root)
+        return True, "Session fully restored across all global directories!"
     except Exception as e:
-        return False, f"Failed to restore chat: {e}"
+        return False, f"Failed to restore session: {e}"

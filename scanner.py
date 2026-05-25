@@ -1,26 +1,14 @@
 import os
 import json
 import re
-from pathlib import Path
 from datetime import datetime
 
-def get_brain_path():
-    """Returns the path to the AntiGravity brain directory."""
+def get_antigravity_root():
+    """Returns the path to the AntiGravity root directory."""
     user_profile = os.environ.get('USERPROFILE')
     if not user_profile:
-        # Fallback if USERPROFILE is not set for some reason
         user_profile = os.path.expanduser('~')
-    return os.path.join(user_profile, '.gemini', 'antigravity', 'brain')
-
-def get_dir_size(path):
-    """Calculates the total size of a directory in bytes."""
-    total_size = 0
-    for dirpath, _, filenames in os.walk(path):
-        for f in filenames:
-            fp = os.path.join(dirpath, f)
-            if not os.path.islink(fp):
-                total_size += os.path.getsize(fp)
-    return total_size
+    return os.path.join(user_profile, '.gemini', 'antigravity')
 
 def format_size(size_bytes):
     """Formats bytes into a human-readable string."""
@@ -65,61 +53,66 @@ def get_chat_title(transcript_path):
 
 def scan_chats():
     """
-    Scans the brain directory and returns a list of dictionaries 
-    containing metadata for each chat session.
+    Scans the antigravity root directory dynamically and returns a list of dictionaries 
+    containing metadata and globally aggregated sizes for each chat session.
     """
-    brain_path = get_brain_path()
-    chats = []
+    ag_root = get_antigravity_root()
+    brain_path = os.path.join(ag_root, 'brain')
+    chats = {}
 
     if not os.path.exists(brain_path):
-        return chats
+        return []
 
-    # Iterate through folders in the brain path
+    # Initialize known chats from the brain directory (the core of every session)
     for item in os.listdir(brain_path):
         item_path = os.path.join(brain_path, item)
-        
-        # We only care about directories (each directory is a conversation-id)
         if os.path.isdir(item_path):
-            try:
-                # Basic stats
-                stat = os.stat(item_path)
-                created_time = datetime.fromtimestamp(stat.st_ctime)
-                modified_time = datetime.fromtimestamp(stat.st_mtime)
-                
-                # Check for transcript.jsonl to get more accurate modification time
-                transcript_path = os.path.join(item_path, '.system_generated', 'logs', 'transcript.jsonl')
-                has_transcript = os.path.exists(transcript_path)
-                
-                title = "Unknown Chat"
-                if has_transcript:
-                    transcript_stat = os.stat(transcript_path)
-                    modified_time = datetime.fromtimestamp(transcript_stat.st_mtime)
-                    title = get_chat_title(transcript_path)
+            chats[item] = {
+                'id': item,
+                'path': item_path,
+                'title': 'Unknown Chat',
+                'created_at': datetime.fromtimestamp(os.stat(item_path).st_ctime),
+                'modified_at': datetime.fromtimestamp(os.stat(item_path).st_mtime),
+                'size_bytes': 0,
+                'has_transcript': False
+            }
 
-                # Get directory size
-                total_size_bytes = get_dir_size(item_path)
-                
-                chats.append({
-                    'id': item,
-                    'title': title,
-                    'path': item_path,
-                    'created_at': created_time,
-                    'modified_at': modified_time,
-                    'size_bytes': total_size_bytes,
-                    'size_formatted': format_size(total_size_bytes),
-                    'has_transcript': has_transcript
-                })
-            except Exception as e:
-                print(f"Error reading {item}: {e}")
+            transcript_path = os.path.join(item_path, '.system_generated', 'logs', 'transcript.jsonl')
+            if os.path.exists(transcript_path):
+                chats[item]['has_transcript'] = True
+                chats[item]['modified_at'] = datetime.fromtimestamp(os.stat(transcript_path).st_mtime)
+                chats[item]['title'] = get_chat_title(transcript_path)
+
+    # Single global walk across all AntiGravity subdirectories to aggregate exact file sizes
+    for root, dirs, files in os.walk(ag_root):
+        for f in files:
+            fp = os.path.join(root, f)
+            if os.path.islink(fp):
                 continue
+            
+            try:
+                size = os.path.getsize(fp)
+            except Exception:
+                continue
+            
+            # Check if this file belongs to any known chat
+            for cid in chats:
+                # If the cid is in the file name OR in the directory path
+                if cid in f or cid in root:
+                    chats[cid]['size_bytes'] += size
+                    break # A file can only belong to one cid
+                    
+    chat_list = list(chats.values())
+    for c in chat_list:
+        c['size_formatted'] = format_size(c['size_bytes'])
 
     # Sort chats by modification time, newest first
-    chats.sort(key=lambda x: x['modified_at'], reverse=True)
-    return chats
+    chat_list.sort(key=lambda x: x['modified_at'], reverse=True)
+    return chat_list
 
 if __name__ == "__main__":
     # Test the scanner
     chats = scan_chats()
     print(f"Found {len(chats)} chats.")
     for c in chats:
-        print(f"[{c['id']}] {c['title']} | Size: {c['size_formatted']} | Modified: {c['modified_at']}")
+        print(f"[{c['id']}] {c['title']} | Global Size: {c['size_formatted']} | Modified: {c['modified_at']}")
