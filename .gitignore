@@ -10,3 +10,8 @@ dist/
 
 # Backups
 *.zip
+
+# Local Test and Temp directories
+test_out/
+old .gemini path/
+temporarilly developed tools for temp reasons/

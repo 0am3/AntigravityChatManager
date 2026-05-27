@@ -1,78 +1,92 @@
 import os
 import shutil
 import zipfile
-import re
 import scanner
+import pb_utils
+
+
+def _get_pb_path():
+    """Return the path to the agyhub_summaries_proto.pb index file."""
+    return os.path.join(scanner.get_antigravity_root(), "agyhub_summaries_proto.pb")
+
 
 def purge_ghost_profiles():
     """
-    Scans global index files for UUIDs and overwrites any that do not correspond
-    to an existing session in the brain directory, removing ghost profiles from the UI.
+    Scans the .pb index for entries whose chat_id no longer has a
+    corresponding directory in the brain folder, and removes only those
+    complete entries.
+
+    This is SAFE because:
+    - It parses the protobuf into discrete entries
+    - It identifies ghosts by matching field-1 chat_id against brain dirs
+    - It removes entire entries — never individual UUID bytes
+    - It creates a backup before writing
     """
-    ag_root = scanner.get_antigravity_root()
+    pb_path = _get_pb_path()
+    if not os.path.isfile(pb_path):
+        return False, "No index file found."
+
+    # Collect valid chat IDs from the brain directory
     valid_chats = {chat['id'] for chat in scanner.scan_chats()}
-    zero_uuid = b"00000000-0000-0000-0000-000000000000"
-    uuid_pattern = re.compile(b'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
-    
-    purged_count = 0
-    for filename in os.listdir(ag_root):
-        if filename.endswith(".pb") or filename.endswith(".pbtxt"):
-            filepath = os.path.join(ag_root, filename)
-            if os.path.isfile(filepath):
-                try:
-                    with open(filepath, 'rb') as f:
-                        content = f.read()
-                    
-                    uuids_in_file = set(uuid_pattern.findall(content))
-                    modified = False
-                    
-                    for u in uuids_in_file:
-                        u_str = u.decode('utf-8')
-                        if u_str != "00000000-0000-0000-0000-000000000000" and u_str not in valid_chats:
-                            # It's a ghost!
-                            content = content.replace(u, zero_uuid)
-                            modified = True
-                            purged_count += 1
-                            
-                    if modified:
-                        with open(filepath, 'wb') as f:
-                            f.write(content)
-                except Exception:
-                    pass
-                    
-    if purged_count > 0:
-        return True, f"Purged {purged_count} ghost profile references."
-    return False, "No ghost profiles found."
+
+    with open(pb_path, 'rb') as f:
+        data = f.read()
+
+    entries, _ = pb_utils.parse_pb_entries(data)
+
+    # Find ghost entries: their chat_id is not in the brain AND is not the zero UUID
+    ghost_ids = set()
+    for entry in entries:
+        cid = pb_utils.get_entry_chat_id(entry["raw"])
+        if cid and cid != "00000000-0000-0000-0000-000000000000" and cid not in valid_chats:
+            ghost_ids.add(cid)
+
+    if not ghost_ids:
+        return False, "No ghost profiles found."
+
+    # Remove the ghost entries
+    new_data, removed = pb_utils.rebuild_pb_without_entries(data, ghost_ids)
+
+    # Backup and write
+    backup_path = pb_utils.safe_write_pb(pb_path, new_data)
+
+    titles = [f'"{r["title"]}"' for r in removed]
+    return True, (
+        f"Purged {len(removed)} ghost profile(s): {', '.join(titles)}.\n"
+        f"Backup saved to: {backup_path}"
+    )
+
 
 def clean_chat(chat_id):
     """
-    Globally walks the AntiGravity root and deletes ANY file or folder 
-    containing the chat_id, ensuring no ghost data is left behind.
+    Deletes all files/folders belonging to a chat session AND removes its
+    entry from the .pb index file.
+
+    This is SAFE because:
+    - The .pb modification uses entry-aware parsing (pb_utils)
+    - It removes only the ONE entry matching the target chat_id
+    - A backup is created before any .pb write
+    - File/folder deletion only targets paths containing the chat_id
     """
     ag_root = scanner.get_antigravity_root()
     deleted_count = 0
-    
-    # Surgical index purging: Overwrite the chat_id in global protobuf indexes
-    # to safely remove it from the left-side bar without corrupting the file structure.
-    zero_uuid = b"00000000-0000-0000-0000-000000000000"
-    target_uuid = chat_id.encode('utf-8')
-    
-    for filename in os.listdir(ag_root):
-        if filename.endswith(".pb") or filename.endswith(".pbtxt"):
-            filepath = os.path.join(ag_root, filename)
-            if os.path.isfile(filepath):
-                try:
-                    with open(filepath, 'rb') as f:
-                        content = f.read()
-                    if target_uuid in content:
-                        new_content = content.replace(target_uuid, zero_uuid)
-                        with open(filepath, 'wb') as f:
-                            f.write(new_content)
-                        deleted_count += 1
-                except Exception:
-                    pass
-    
-    # We walk bottom-up so we can safely delete directories without breaking the walk
+    removed_title = None
+
+    # --- Step 1: Surgically remove the entry from the .pb index ---
+    pb_path = _get_pb_path()
+    if os.path.isfile(pb_path):
+        with open(pb_path, 'rb') as f:
+            data = f.read()
+
+        new_data, removed = pb_utils.rebuild_pb_without_entries(data, chat_id)
+
+        if removed:
+            pb_utils.safe_write_pb(pb_path, new_data)
+            removed_title = removed[0]["title"]
+            deleted_count += 1
+
+    # --- Step 2: Delete files and directories containing the chat_id ---
+    # Walk bottom-up so we can safely delete directories
     for root, dirs, files in os.walk(ag_root, topdown=False):
         for f in files:
             if chat_id in f or chat_id in root:
@@ -82,7 +96,7 @@ def clean_chat(chat_id):
                     deleted_count += 1
                 except Exception:
                     pass
-        
+
         for d in dirs:
             if chat_id in d:
                 dp = os.path.join(root, d)
@@ -91,18 +105,22 @@ def clean_chat(chat_id):
                     deleted_count += 1
                 except Exception:
                     pass
-                    
+
     if deleted_count > 0:
-        return True, f"Session thoroughly purged. {deleted_count} scattered artifacts removed."
+        msg = f"Session cleaned. {deleted_count} item(s) removed."
+        if removed_title:
+            msg += f'\nRemoved "{removed_title}" from sidebar index.'
+        return True, msg
     return False, "No data found to clean."
+
 
 def package_chat(chat_id, output_dir):
     """
-    Globally packages all files related to the chat_id from anywhere inside 
+    Globally packages all files related to the chat_id from anywhere inside
     the AntiGravity root into a structured zip file.
     """
     ag_root = scanner.get_antigravity_root()
-    
+
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
@@ -120,7 +138,7 @@ def package_chat(chat_id, output_dir):
                         arcname = os.path.relpath(fp, ag_root)
                         zipf.write(fp, arcname)
                         files_added += 1
-                        
+
         if files_added > 0:
             return True, f"Global package successful! {files_added} artifacts safely archived at {zip_path}"
         else:
@@ -128,15 +146,16 @@ def package_chat(chat_id, output_dir):
     except Exception as e:
         return False, f"Failed to package session: {e}"
 
+
 def restore_chat(zip_path):
     """
     Restores a globally packaged zip file directly into the AntiGravity root.
     """
     ag_root = scanner.get_antigravity_root()
-    
+
     if not os.path.exists(zip_path):
         return False, "Zip file does not exist."
-    
+
     if not zipfile.is_zipfile(zip_path):
         return False, "File is not a valid zip archive."
 
