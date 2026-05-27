@@ -10,21 +10,42 @@ def _get_pb_path():
     return os.path.join(scanner.get_antigravity_root(), "agyhub_summaries_proto.pb")
 
 
-def purge_ghost_profiles():
+def get_index_status():
     """
-    Scans the .pb index for entries whose chat_id no longer has a
-    corresponding directory in the brain folder, and removes only those
-    complete entries.
+    Reads the .pb sidebar index and returns a full profile of its contents.
 
-    This is SAFE because:
-    - It parses the protobuf into discrete entries
-    - It identifies ghosts by matching field-1 chat_id against brain dirs
-    - It removes entire entries — never individual UUID bytes
-    - It creates a backup before writing
+    Returns a dict with:
+        'exists':       bool    — whether the .pb file exists
+        'path':         str     — absolute path to the .pb file
+        'size_bytes':   int     — file size in bytes
+        'total_entries': int    — number of entries in the index
+        'valid_count':  int     — entries with a matching brain directory
+        'ghost_count':  int     — entries with no matching brain directory
+        'zeroed_count': int     — entries whose chat_id is all-zeros (corrupted)
+        'entries':      list    — per-entry details, each a dict:
+            'chat_id':  str
+            'title':    str
+            'status':   str     — one of 'valid', 'ghost', 'zeroed'
+            'entry_size': int   — byte size of this entry in the .pb file
     """
     pb_path = _get_pb_path()
+
+    result = {
+        'exists': False,
+        'path': pb_path,
+        'size_bytes': 0,
+        'total_entries': 0,
+        'valid_count': 0,
+        'ghost_count': 0,
+        'zeroed_count': 0,
+        'entries': [],
+    }
+
     if not os.path.isfile(pb_path):
-        return False, "No index file found."
+        return result
+
+    result['exists'] = True
+    result['size_bytes'] = os.path.getsize(pb_path)
 
     # Collect valid chat IDs from the brain directory
     valid_chats = {chat['id'] for chat in scanner.scan_chats()}
@@ -33,27 +54,63 @@ def purge_ghost_profiles():
         data = f.read()
 
     entries, _ = pb_utils.parse_pb_entries(data)
+    result['total_entries'] = len(entries)
 
-    # Find ghost entries: their chat_id is not in the brain AND is not the zero UUID
-    ghost_ids = set()
+    zero_uuid = "00000000-0000-0000-0000-000000000000"
+
     for entry in entries:
         cid = pb_utils.get_entry_chat_id(entry["raw"])
-        if cid and cid != "00000000-0000-0000-0000-000000000000" and cid not in valid_chats:
-            ghost_ids.add(cid)
+        title = pb_utils.get_entry_title(entry["raw"])
+        entry_size = len(entry["full_raw"])
 
-    if not ghost_ids:
-        return False, "No ghost profiles found."
+        if cid == zero_uuid or cid is None:
+            status = "zeroed"
+            result['zeroed_count'] += 1
+        elif cid in valid_chats:
+            status = "valid"
+            result['valid_count'] += 1
+        else:
+            status = "ghost"
+            result['ghost_count'] += 1
 
-    # Remove the ghost entries
-    new_data, removed = pb_utils.rebuild_pb_without_entries(data, ghost_ids)
+        result['entries'].append({
+            'chat_id': cid or zero_uuid,
+            'title': title,
+            'status': status,
+            'entry_size': entry_size,
+        })
 
-    # Backup and write
+    return result
+
+
+def remove_index_entries(chat_ids_to_remove):
+    """
+    Selectively remove specific entries from the .pb sidebar index.
+
+    This is user-driven — only the entries explicitly selected by the user
+    are removed. A backup is always created before writing.
+
+    Returns (success, message).
+    """
+    pb_path = _get_pb_path()
+    if not os.path.isfile(pb_path):
+        return False, "No index file found."
+
+    with open(pb_path, 'rb') as f:
+        data = f.read()
+
+    new_data, removed = pb_utils.rebuild_pb_without_entries(data, chat_ids_to_remove)
+
+    if not removed:
+        return False, "None of the selected entries were found in the index."
+
     backup_path = pb_utils.safe_write_pb(pb_path, new_data)
 
     titles = [f'"{r["title"]}"' for r in removed]
     return True, (
-        f"Purged {len(removed)} ghost profile(s): {', '.join(titles)}.\n"
-        f"Backup saved to: {backup_path}"
+        f"Removed {len(removed)} entry/entries from sidebar index:\n"
+        + "\n".join(f"  - {t}" for t in titles)
+        + f"\n\nBackup saved to:\n{backup_path}"
     )
 
 
