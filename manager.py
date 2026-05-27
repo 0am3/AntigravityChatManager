@@ -1,7 +1,48 @@
 import os
 import shutil
 import zipfile
+import re
 import scanner
+
+def purge_ghost_profiles():
+    """
+    Scans global index files for UUIDs and overwrites any that do not correspond
+    to an existing session in the brain directory, removing ghost profiles from the UI.
+    """
+    ag_root = scanner.get_antigravity_root()
+    valid_chats = {chat['id'] for chat in scanner.scan_chats()}
+    zero_uuid = b"00000000-0000-0000-0000-000000000000"
+    uuid_pattern = re.compile(b'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+    
+    purged_count = 0
+    for filename in os.listdir(ag_root):
+        if filename.endswith(".pb") or filename.endswith(".pbtxt"):
+            filepath = os.path.join(ag_root, filename)
+            if os.path.isfile(filepath):
+                try:
+                    with open(filepath, 'rb') as f:
+                        content = f.read()
+                    
+                    uuids_in_file = set(uuid_pattern.findall(content))
+                    modified = False
+                    
+                    for u in uuids_in_file:
+                        u_str = u.decode('utf-8')
+                        if u_str != "00000000-0000-0000-0000-000000000000" and u_str not in valid_chats:
+                            # It's a ghost!
+                            content = content.replace(u, zero_uuid)
+                            modified = True
+                            purged_count += 1
+                            
+                    if modified:
+                        with open(filepath, 'wb') as f:
+                            f.write(content)
+                except Exception:
+                    pass
+                    
+    if purged_count > 0:
+        return True, f"Purged {purged_count} ghost profile references."
+    return False, "No ghost profiles found."
 
 def clean_chat(chat_id):
     """

@@ -33,8 +33,11 @@ class ChatManagerApp(ctk.CTk):
         self.btn_refresh = ctk.CTkButton(self.top_frame, text="Refresh", width=100, command=self.load_chats)
         self.btn_refresh.grid(row=0, column=1, sticky="e", padx=10)
 
+        self.btn_purge = ctk.CTkButton(self.top_frame, text="Purge Ghosts", fg_color="#C62828", hover_color="#8E0000", command=self.on_purge_ghosts_clicked)
+        self.btn_purge.grid(row=0, column=2, sticky="e", padx=10)
+
         self.btn_restore = ctk.CTkButton(self.top_frame, text="Restore Session (.zip)", fg_color="#2A8C55", hover_color="#206A40", command=self.on_restore_clicked)
-        self.btn_restore.grid(row=0, column=2, sticky="e")
+        self.btn_restore.grid(row=0, column=3, sticky="e")
 
         # Scrollable Frame for Chat List
         self.scroll_frame = ctk.CTkScrollableFrame(self)
@@ -122,6 +125,15 @@ class ChatManagerApp(ctk.CTk):
             self.load_chats()
         else:
             messagebox.showerror("Error", msg)
+
+    def on_purge_ghosts_clicked(self):
+        confirm = messagebox.askyesno("Confirm Purge", "This will scan your AntiGravity indexes and permanently remove any ghost chat profiles that no longer have data on disk.\n\nContinue?")
+        if confirm:
+            success, msg = manager.purge_ghost_profiles()
+            if success:
+                messagebox.showinfo("Success", msg)
+            else:
+                messagebox.showinfo("Info", msg)
 
 if __name__ == "__main__":
     app = ChatManagerApp()
